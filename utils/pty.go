@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"github.com/creack/pty"
 	"os"
 	"os/exec"
 	"strconv"
@@ -30,7 +29,7 @@ func StartPtyWithSize(cmd *exec.Cmd, ws *Winsize) (*os.File, *os.File, error) {
 
 // StartPtyWithAttrs 返回创建 pty、tty，将 cmd 的输入输出绑定到 tty，然后返回对应的 pty,tty
 func StartPtyWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (*os.File, *os.File, error) {
-	ptyF, tty, err := pty.Open()
+	ptyF, tty, err := Open()
 	if err != nil {
 		return nil, nil, err
 	}
