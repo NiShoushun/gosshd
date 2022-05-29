@@ -332,6 +332,8 @@ func (handler *DefaultSessionChanHandler) HandleShellReq(request gosshd.Request,
 	// fixme 当 session 取消信号来临时，是否要关闭子进程
 	go func() {
 		select {
+		case <-exitCtx.Done():
+			return
 		case <-session.Done():
 			cmd.Process.Kill()
 		}

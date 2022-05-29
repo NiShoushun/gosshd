@@ -33,3 +33,24 @@ type SSHChannel interface {
 }
 
 type NewChannelHandleFunc func(channel SSHNewChannel, ctx Context)
+
+// DiscardRequests 拒绝所有的 Request，可由 ctx 取消执行
+func DiscardRequests(in <-chan *ssh.Request, ctx Context) {
+	for {
+		select {
+		case req := <-in:
+			{
+				if req == nil {
+					return
+				}
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+		case <-ctx.Done():
+			{
+				return
+			}
+		}
+	}
+}

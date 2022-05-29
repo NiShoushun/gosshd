@@ -97,7 +97,10 @@ func (ctx *SSHContext) SetUser(user *User) {
 	ctx.SetValue(CtxKeyUser, user)
 }
 
+// SetValue 设置值，会上锁
 func (ctx *SSHContext) SetValue(key, value interface{}) {
+	ctx.Lock()
+	defer ctx.Unlock()
 	ctx.Context = context.WithValue(ctx.Context, key, value)
 }
 

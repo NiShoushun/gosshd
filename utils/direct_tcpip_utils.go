@@ -69,7 +69,7 @@ func (d *TcpIpDirector) HandleDirectTcpIP(newChannel gosshd.SSHNewChannel, ctx g
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go ssh.DiscardRequests(requests)
+	go gosshd.DiscardRequests(requests, ctx)
 
 	go func() {
 		CopyBufferWithContext(channel, conn, nil, c.Done())

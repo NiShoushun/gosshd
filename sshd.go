@@ -279,7 +279,7 @@ func (sshd *SSHServer) HandleConn(conn net.Conn) {
 	if sshd.GlobalRequestHandlers != nil {
 		go sshd.serveGlobalRequest(reqs, sshConn, ctx)
 	} else {
-		go ssh.DiscardRequests(reqs)
+		go DiscardRequests(reqs, ctx)
 	}
 
 	// 并发处理每一个客户端请求建立的 Channel
@@ -313,7 +313,7 @@ func (sshd *SSHServer) serveGlobalRequest(requests <-chan *ssh.Request, sshConn 
 			if request == nil {
 				return
 			}
-			fmt.Println("global", request.Type, string(request.Payload))
+			//fmt.Println("global", request.Type, string(request.Payload))
 			if handler, ok := sshd.GlobalRequestHandlers[request.Type]; ok {
 				go handler(Request{request}, sshConn, ctx)
 			} else {
