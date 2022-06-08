@@ -416,9 +416,8 @@ func (handler *DefaultSessionChanHandler) execCmd(request gosshd.Request, cmdlin
 			wbuf2 = make([]byte, handler.copyBufSize)
 		}
 		exitCtx, cancel := context.WithCancel(session.Ctx())
-		// fixme 不清楚将标准输出与标准错误输出并发输出到 session 中会不会造成数据混乱
 		go CopyBufferWithContext(stdIn, session, rbuf, exitCtx.Done())
-		go CopyBufferWithContext(session, stdErr, wbuf, exitCtx.Done())
+		go CopyBufferWithContext(session.Stderr(), stdErr, wbuf, exitCtx.Done())
 		go CopyBufferWithContext(session, stdOut, wbuf2, exitCtx.Done())
 		if err = cmd.Start(); err != nil {
 			cancel()
