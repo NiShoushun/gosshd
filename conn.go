@@ -24,18 +24,18 @@ type SSHConn interface {
 	ssh.Conn
 }
 
-type SSHNewChannel interface {
+type NewChannel interface {
 	ssh.NewChannel
 }
 
-type SSHChannel interface {
+type Channel interface {
 	ssh.Channel
 }
 
-type NewChannelHandleFunc func(channel SSHNewChannel, ctx Context)
+type NewChannelHandleFunc func(ctx Context, channel NewChannel)
 
 // DiscardRequests 拒绝所有的 Request，可由 ctx 取消执行
-func DiscardRequests(in <-chan *ssh.Request, ctx Context) {
+func DiscardRequests(ctx Context, in <-chan *ssh.Request) {
 	for {
 		select {
 		case req := <-in:

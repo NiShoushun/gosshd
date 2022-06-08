@@ -25,14 +25,14 @@ type SSHConnFailedLogCallback func(reason error, conn net.Conn)
 // SSHConnLogCallback 建立 SSH 连接成功之后，要立即执行的回调函数。
 // 此时的 sshCtx 中已经包含了基本的数据；
 // 当该函数返回的 error 不为 nil 时，将会停止下一步，且 SSH 连接会被关闭。
-type SSHConnLogCallback func(conn SSHConn, ctx Context) error
+type SSHConnLogCallback func(ctx Context) error
 
 // LookupUserCallback 根据用户名，获取用户详细数据实例
 type LookupUserCallback func(metadata ConnMetadata) (*User, error)
 
 // GlobalRequestCallback 当成功建立连接后，对于全局请求的处理，例如 “tcpip-forward” 以及 “cancel-tcpip-forward“ 等请求处理，
 // 这类要求通常是为了客户端让服务端向客户端打开一个通道，进行数据转发。
-type GlobalRequestCallback func(request Request, conn SSHConn, ctx Context)
+type GlobalRequestCallback func(ctx Context, request Request)
 
 type ContextBuilder func(sshd *SSHServer) (Context, context.CancelFunc)
 
@@ -108,13 +108,13 @@ func (sshd *SSHServer) SetBannerCallback(cb BannerCallback) {
 	sshd.BannerCallback = WrapBannerCallback(cb)
 }
 
-// SetNewChanHandleFunc 添加对应类型的 channel 请求处理函数
-func (sshd *SSHServer) SetNewChanHandleFunc(ctype string, handleFunc NewChannelHandleFunc) {
+// NewChannel 添加对应类型的 channel 请求处理函数
+func (sshd *SSHServer) NewChannel(ctype string, handleFunc NewChannelHandleFunc) {
 	sshd.NewChannelHandlers[ctype] = handleFunc
 }
 
-// SetGlobalRequestHandleFunc 添加对应类型的 global request 请求处理函数
-func (sshd *SSHServer) SetGlobalRequestHandleFunc(ctype string, handleFunc GlobalRequestCallback) {
+// NewGlobalRequest 添加对应类型的 global request 请求处理函数
+func (sshd *SSHServer) NewGlobalRequest(ctype string, handleFunc GlobalRequestCallback) {
 	sshd.GlobalRequestHandlers[ctype] = handleFunc
 }
 
@@ -127,8 +127,8 @@ func (sshd *SSHServer) addSSHConnWithCancel(conn SSHConn, cancelFunc context.Can
 	sshd.conns[conn] = cancelFunc
 }
 
-// 执行 conn 对应的cancel 并删除 conn
-func (sshd *SSHServer) delSSHConn(conn SSHConn) {
+// DelSSHConn 执行 conn 对应的cancel 并删除 conn
+func (sshd *SSHServer) DelSSHConn(conn SSHConn) {
 	sshd.Lock()
 	defer sshd.Unlock()
 	if cancel, ok := sshd.conns[conn]; ok {
@@ -176,7 +176,7 @@ func (sshd *SSHServer) Close() error {
 	err := sshd.listener.Close()
 	for con, _ := range sshd.conns {
 		err = con.Close()
-		sshd.delSSHConn(con)
+		sshd.DelSSHConn(con)
 	}
 	return err
 }
@@ -192,7 +192,7 @@ func (sshd *SSHServer) Shutdown() error {
 	for con, cancel := range sshd.conns {
 		cancel()
 		err := con.Close()
-		sshd.delSSHConn(con)
+		sshd.DelSSHConn(con)
 		if err != nil {
 			return err
 		}
@@ -267,7 +267,7 @@ func (sshd *SSHServer) HandleConn(conn net.Conn) {
 	ctx.SetConn(sshConn)
 
 	if sshd.SSHConnLogCallback != nil {
-		err := sshd.SSHConnLogCallback(sshConn, ctx)
+		err := sshd.SSHConnLogCallback(ctx)
 		if err != nil {
 			sshConn.Close()
 			return
@@ -277,9 +277,9 @@ func (sshd *SSHServer) HandleConn(conn net.Conn) {
 
 	// 全局请求处理
 	if sshd.GlobalRequestHandlers != nil {
-		go sshd.serveGlobalRequest(reqs, sshConn, ctx)
+		go sshd.serveGlobalRequest(ctx, reqs)
 	} else {
-		go DiscardRequests(reqs, ctx)
+		go DiscardRequests(ctx, reqs)
 	}
 
 	// 并发处理每一个客户端请求建立的 Channel
@@ -292,7 +292,7 @@ func (sshd *SSHServer) HandleConn(conn net.Conn) {
 			}
 			//fmt.Println("channel:", newChannel.ChannelType())
 			if handle, ok := sshd.NewChannelHandlers[newChannel.ChannelType()]; ok {
-				go handle(newChannel, ctx)
+				go handle(ctx, newChannel)
 			} else {
 				newChannel.Reject(UnknownChannelType, fmt.Sprintf("not support %s", newChannel.ChannelType()))
 			}
@@ -301,10 +301,10 @@ func (sshd *SSHServer) HandleConn(conn net.Conn) {
 		}
 	}
 del: // 删除
-	sshd.delSSHConn(sshConn)
+	sshd.DelSSHConn(sshConn)
 }
 
-func (sshd *SSHServer) serveGlobalRequest(requests <-chan *ssh.Request, sshConn SSHConn, ctx Context) {
+func (sshd *SSHServer) serveGlobalRequest(ctx Context, requests <-chan *ssh.Request) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -315,7 +315,7 @@ func (sshd *SSHServer) serveGlobalRequest(requests <-chan *ssh.Request, sshConn 
 			}
 			//fmt.Println("global", request.Type, string(request.Payload))
 			if handler, ok := sshd.GlobalRequestHandlers[request.Type]; ok {
-				go handler(Request{request}, sshConn, ctx)
+				go handler(ctx, Request{request})
 			} else {
 				request.Reply(false, nil)
 			}

@@ -1,4 +1,4 @@
-package utils
+package serv
 
 import (
 	"context"
@@ -24,7 +24,7 @@ type TcpIpDirector struct {
 
 // HandleDirectTcpIP 开始处理一个 direct-tcpip 类型的信道，连接客户端发送的目标网络，并连接双方。
 // net.DialTimeout 将会被调用，timeout 为 d 的 timeout 属性；
-func (d *TcpIpDirector) HandleDirectTcpIP(newChannel gosshd.SSHNewChannel, ctx gosshd.Context) {
+func (d *TcpIpDirector) HandleDirectTcpIP(ctx gosshd.Context, newChannel gosshd.NewChannel) {
 	if newChannel.ChannelType() != gosshd.DirectTcpIpChannel {
 		return
 	}
@@ -72,7 +72,7 @@ func (d *TcpIpDirector) HandleDirectTcpIP(newChannel gosshd.SSHNewChannel, ctx g
 	go gosshd.DiscardRequests(requests, ctx)
 
 	go func() {
-		CopyBufferWithContext(channel, conn, nil, c.Done())
+		CopyBufferWithContext(channel, conn, nil, c)
 		defer conn.Close()
 		defer channel.Close()
 		wg.Done()
@@ -80,7 +80,7 @@ func (d *TcpIpDirector) HandleDirectTcpIP(newChannel gosshd.SSHNewChannel, ctx g
 	}()
 
 	go func() {
-		CopyBufferWithContext(conn, channel, nil, c.Done())
+		CopyBufferWithContext(conn, channel, nil, c)
 		conn.Close()
 		channel.Close()
 		wg.Done()

@@ -1,4 +1,4 @@
-package utils
+package serv
 
 import (
 	"github.com/nishoushun/gosshd"
@@ -24,12 +24,12 @@ func NewForwardedTcpIpHandler(bufSize int) *ForwardedTcpIpRequestHandler {
 }
 
 // HandleRequest 可用于注册 tcpip-forward 与 cancel-tcpip-forward 类型的全局请求的处理函数
-func (h *ForwardedTcpIpRequestHandler) HandleRequest(request gosshd.Request, conn gosshd.SSHConn, ctx gosshd.Context) {
+func (h *ForwardedTcpIpRequestHandler) HandleRequest(ctx gosshd.Context, request gosshd.Request) {
 	switch request.Type {
 	case gosshd.GlobalReqTcpIpForward:
-		h.ServeForward(request, conn, ctx)
+		h.ServeForward(ctx, request)
 	case gosshd.GlobalReqCancelTcpIpForward:
-		h.CancelForward(request, conn, ctx)
+		h.CancelForward(ctx, request)
 	default:
 		request.Reply(false, nil)
 	}
@@ -37,7 +37,7 @@ func (h *ForwardedTcpIpRequestHandler) HandleRequest(request gosshd.Request, con
 
 // ServeForward 处理 tcpip-forward 全局请求，监听请求消息中的地址与端口；
 // 每当监听到一个新的网络连接，就向客户端发送一个 forwarded-tcpip 通道建立请求，转发连接内容
-func (h *ForwardedTcpIpRequestHandler) ServeForward(request gosshd.Request, conn gosshd.SSHConn, ctx gosshd.Context) {
+func (h *ForwardedTcpIpRequestHandler) ServeForward(ctx gosshd.Context, request gosshd.Request) {
 	forwardReq := &gosshd.RemoteForwardRequestMsg{}
 	if err := ssh.Unmarshal(request.Payload, forwardReq); err != nil {
 		request.Reply(false, invalidPayload)
@@ -86,7 +86,7 @@ func (h *ForwardedTcpIpRequestHandler) ServeForward(request gosshd.Request, conn
 
 		// 每监听到一个网络连接，就向客户端打开一个通道，然后转发数据
 		go func() {
-			channel, requests, err := conn.OpenChannel(gosshd.ForwardedTcpIpChannelType, remoteForwardChannelDataMsg)
+			channel, requests, err := ctx.Conn().OpenChannel(gosshd.ForwardedTcpIpChannelType, remoteForwardChannelDataMsg)
 			if err != nil {
 				request.Reply(false, []byte(err.Error()))
 				remoteConn.Close()
@@ -106,20 +106,20 @@ func (h *ForwardedTcpIpRequestHandler) ServeForward(request gosshd.Request, conn
 			go func() {
 				defer channel.Close()
 				defer remoteConn.Close()
-				CopyBufferWithContext(channel, remoteConn, rbuf, ctx.Done())
+				CopyBufferWithContext(channel, remoteConn, rbuf, ctx)
 			}()
 
 			go func() {
 				defer channel.Close()
 				defer remoteConn.Close()
-				CopyBufferWithContext(remoteConn, channel, wbuf, ctx.Done())
+				CopyBufferWithContext(remoteConn, channel, wbuf, ctx)
 			}()
 		}()
 	}
 	h.CloseAndDel(addr)
 }
 
-func (h *ForwardedTcpIpRequestHandler) CancelForward(request gosshd.Request, conn gosshd.SSHConn, ctx gosshd.Context) {
+func (h *ForwardedTcpIpRequestHandler) CancelForward(ctx gosshd.Context, request gosshd.Request) {
 	cancelReq := &gosshd.RemoteForwardCancelRequestMsg{}
 	if err := ssh.Unmarshal(request.Payload, cancelReq); err != nil {
 		request.Reply(false, invalidPayload)

@@ -2,7 +2,6 @@ package gosshd
 
 import (
 	"golang.org/x/crypto/ssh"
-	"net"
 )
 
 const (
@@ -22,32 +21,77 @@ type Request struct {
 	*ssh.Request
 }
 
-type Session interface {
-	SSHChannel
-	User() *User
-	ClientVersion() string
-	ServerVersion() string
-	RemoteAddr() net.Addr
-	LocalAddr() net.Addr
+// 从 ssh 包中导出的数据结构，
+// 包含请求包对应结构体，用于解析 Request 的 payload. 解析方式定义于 rfc 4254 https://datatracker.ietf.org/doc/html/rfc4254；
+// 以及导出的密码学算法名称。
 
-	// Permissions 用于身份验证回调函数的返回值，包含用户的权限信息，取决于具体的身份认证 callback 实现
-	Permissions() *Permissions
-	Conn() ssh.Conn
-	Server() *SSHServer
+type PtyRequestMsg struct {
+	Term     string
+	Columns  uint32
+	Rows     uint32
+	Width    uint32
+	Height   uint32
+	Modelist string
+}
+type ExecMsg struct {
+	Command string
+}
 
-	Channel() SSHChannel
+type PtyWindowChangeMsg struct {
+	Columns uint32
+	Rows    uint32
+	Width   uint32
+	Height  uint32
+}
 
-	PtyMsg() <-chan *PtyRequestMsg
-	WinchMsg() <-chan *PtyWindowChangeMsg
-	SignalMsg() <-chan *SignalMsg
+type SetenvRequest struct {
+	Name  string
+	Value string
+}
 
-	PutPtyMsg(*PtyRequestMsg)
-	PutWinchMsg(*PtyWindowChangeMsg)
-	PutSignalMsg(*SignalMsg)
+type SubsystemRequestMsg struct {
+	Subsystem string
+}
 
-	Env() []string   // 获取保存的环境变量
-	SetEnv([]string) // 设置环境变量
+type Signal string
 
-	Done() <-chan struct{} // 取消子协程的通知
-	Ctx() Context          // 应当返回本连接对应的全局上下文
+const (
+	SIGABRT Signal = "ABRT"
+	SIGALRM Signal = "ALRM"
+	SIGFPE  Signal = "FPE"
+	SIGHUP  Signal = "HUP"
+	SIGILL  Signal = "ILL"
+	SIGINT  Signal = "INT"
+	SIGKILL Signal = "KILL"
+	SIGPIPE Signal = "PIPE"
+	SIGQUIT Signal = "QUIT"
+	SIGSEGV Signal = "SEGV"
+	SIGTERM Signal = "TERM"
+	SIGUSR1 Signal = "USR1"
+	SIGUSR2 Signal = "USR2"
+)
+
+var Signals = map[Signal]int{
+	SIGABRT: 6,
+	SIGALRM: 14,
+	SIGFPE:  8,
+	SIGHUP:  1,
+	SIGILL:  4,
+	SIGINT:  2,
+	SIGKILL: 9,
+	SIGPIPE: 13,
+	SIGQUIT: 3,
+	SIGSEGV: 11,
+	SIGTERM: 15,
+}
+
+type SignalMsg struct {
+	Signal Signal
+}
+
+func (s Signal) String() string {
+	return string(s)
+}
+func (s Signal) Signal() {
+
 }

@@ -1,4 +1,4 @@
-module github.com/nishoushun/gosshd/utils
+module github.com/nishoushun/gosshd/serv
 
 go 1.18
 

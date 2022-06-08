@@ -1,4 +1,4 @@
-package utils
+package serv
 
 import (
 	"context"
@@ -12,74 +12,44 @@ import (
 	"syscall"
 )
 
-type BasicSession struct {
-	sync.Mutex // 修改值时的信号量
-	gosshd.SSHChannel
-	gosshd.Context
-	winchCh chan *gosshd.PtyWindowChangeMsg // window-change 请求队列
-	sigCh   chan *gosshd.SignalMsg          // signal 请求队列
-	ptyCh   chan *gosshd.PtyRequestMsg      // pty-req 请求队列
-	env     []string                        // 该 session 环境变量
-	copyBuf []byte
-}
-
-// Channel 获取 Session 的底层通道 SSHChannel
-func (session *BasicSession) Channel() gosshd.SSHChannel {
-	return session.SSHChannel
-}
-
-// Close 调用 cancel 并关闭 SSHChannel
-func (session *BasicSession) Close() error {
-	return session.SSHChannel.Close()
-}
-
 // Env 获取设置的环境变量
-func (session *BasicSession) Env() []string {
-	return session.env
+func (handler *DefaultSessionChanHandler) Env() []string {
+	return handler.env
 }
 
 // SetEnv 设置环境变量，单个的形式应该为 %s=%s
-func (session *BasicSession) SetEnv(env []string) {
-	session.env = env
+func (handler *DefaultSessionChanHandler) SetEnv(env []string) {
+	handler.env = env
 }
 
 // PtyMsg 从缓存队列中取出最新的 pty-req 请求信息，若无，则阻塞至一个客户端发送一个新的 pty-req 请求
-func (session *BasicSession) PtyMsg() <-chan *gosshd.PtyRequestMsg {
-	return session.ptyCh
+func (handler *DefaultSessionChanHandler) PtyMsg() <-chan *gosshd.PtyRequestMsg {
+	return handler.ptyCh
 }
 
 // WinchMsg 从缓存队列中取出最新的 window-change 请求信息，若无，则阻塞至一个客户端发送一个新的 window-change 请求
-func (session *BasicSession) WinchMsg() <-chan *gosshd.PtyWindowChangeMsg {
-	return session.winchCh
+func (handler *DefaultSessionChanHandler) WinchMsg() <-chan *gosshd.PtyWindowChangeMsg {
+	return handler.winchCh
 }
 
 // SignalMsg 从缓存队列中取出最新的 signal 请求信息，若无，则阻塞至一个客户端发送一个新的 signal 请求
-func (session *BasicSession) SignalMsg() <-chan *gosshd.SignalMsg {
-	return session.sigCh
+func (handler *DefaultSessionChanHandler) SignalMsg() <-chan *gosshd.SignalMsg {
+	return handler.sigCh
 }
 
 // PutPtyMsg 放入 pty-req 请求信息至缓存队列中，若队列满，则阻塞至一个 pty-req 请求被取出
-func (session *BasicSession) PutPtyMsg(msg *gosshd.PtyRequestMsg) {
-	session.ptyCh <- msg
+func (handler *DefaultSessionChanHandler) PutPtyMsg(msg *gosshd.PtyRequestMsg) {
+	handler.ptyCh <- msg
 }
 
 // PutWinchMsg 放入 window-change 请求信息至缓存队列中，若队列满，则阻塞至一个 window-change 请求被取出
-func (session *BasicSession) PutWinchMsg(msg *gosshd.PtyWindowChangeMsg) {
-	session.winchCh <- msg
+func (handler *DefaultSessionChanHandler) PutWinchMsg(msg *gosshd.PtyWindowChangeMsg) {
+	handler.winchCh <- msg
 }
 
 // PutSignalMsg 放入 signal 请求信息至缓存队列中，若队列满，则阻塞至一个 signal 请求被取出
-func (session *BasicSession) PutSignalMsg(msg *gosshd.SignalMsg) {
-	session.sigCh <- msg
-}
-
-// Done 类似于 Context#Done() 方法，返回一个管道，用于取消该 Session 关联的所有的子协程
-func (session *BasicSession) Done() <-chan struct{} {
-	return session.Context.Done()
-}
-
-func (session *BasicSession) Ctx() gosshd.Context {
-	return session.Context
+func (handler *DefaultSessionChanHandler) PutSignalMsg(msg *gosshd.SignalMsg) {
+	handler.sigCh <- msg
 }
 
 // NewSessionChannelHandler  创建一个 DefaultSessionChanHandler。
@@ -102,44 +72,51 @@ func NewSessionChannelHandler(winMsgBufSize, ptyMsgBufSize, sigMsgBufSize, copyB
 	}
 
 	handler := &DefaultSessionChanHandler{
-		Mutex:         sync.Mutex{},
-		winMsgBufSize: winMsgBufSize,
-		ptyMsgBufSize: ptyMsgBufSize,
-		sigMsgBufSize: sigMsgBufSize,
-		copyBufSize:   copyBufSize,
-		ReqHandlers:   map[string]HandleRequest{},
+		Mutex:       sync.Mutex{},
+		winchCh:     make(chan *gosshd.PtyWindowChangeMsg, winMsgBufSize),
+		ptyCh:       make(chan *gosshd.PtyRequestMsg, ptyMsgBufSize),
+		sigCh:       make(chan *gosshd.SignalMsg, sigMsgBufSize),
+		env:         make([]string, 0),
+		copyBufSize: copyBufSize,
+		ReqHandlers: map[string]RequestHandlerFunc{},
 	}
 	return handler
 }
 
 // SetDefaults 注册默认的请求处理函数
 func (handler *DefaultSessionChanHandler) SetDefaults() {
-	handler.SetReqHandler(gosshd.ReqPty, handler.HandlePtyReq)
-	handler.SetReqHandler(gosshd.ReqShell, handler.HandleShellReq)
-	handler.SetReqHandler(gosshd.ReqExec, handler.HandleExecReq)
-	handler.SetReqHandler(gosshd.ReqSignal, handler.HandleSignalReq)
-	handler.SetReqHandler(gosshd.ReqEnv, handler.HandleEnvReq)
-	handler.SetReqHandler(gosshd.ReqWinCh, handler.HandleWinChangeReq)
-	handler.SetReqHandler(gosshd.ReqExit, handler.HandleExit)
+	handler.SetReqHandlerFunc(gosshd.ReqPty, handler.HandlePtyReq)
+	handler.SetReqHandlerFunc(gosshd.ReqShell, handler.HandleShellReq)
+	handler.SetReqHandlerFunc(gosshd.ReqExec, handler.HandleExecReq)
+	handler.SetReqHandlerFunc(gosshd.ReqSignal, handler.HandleSignalReq)
+	handler.SetReqHandlerFunc(gosshd.ReqEnv, handler.HandleEnvReq)
+	handler.SetReqHandlerFunc(gosshd.ReqWinCh, handler.HandleWinChangeReq)
+	handler.SetReqHandlerFunc(gosshd.ReqExit, handler.HandleExit)
 }
 
-// HandleRequest 处理单个请求
-type HandleRequest func(request gosshd.Request, session gosshd.Session) error
+// RequestHandlerFunc 处理单个请求
+type RequestHandlerFunc func(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error
 
 // ReqLogCallback 用于记录接受的请求，处理结果
 // err 为处理函数返回的错误；rtype 为请求类型；wantReply 为是否需要回应客户端；payload 为请求附带的数据
 type ReqLogCallback func(err error, rtype string, wantReply bool, payload []byte, context gosshd.Context)
 
-type CreateSessionCallback func(gosshd.SSHChannel, gosshd.Context) gosshd.Session
+type CreateSessionCallback func(gosshd.Context, gosshd.Channel) gosshd.Channel
 
-// DefaultSessionChanHandler 一个处理 Session 类型 SSH 通道的 ChannelHandler
+// DefaultSessionChanHandler 一个处理 Channel 类型 SSH 通道的 ChannelHandler
 type DefaultSessionChanHandler struct {
 	sync.Mutex
 	winMsgBufSize int
 	ptyMsgBufSize int
 	sigMsgBufSize int
-	copyBufSize   int
-	ReqHandlers   map[string]HandleRequest
+
+	winchCh chan *gosshd.PtyWindowChangeMsg // window-change 请求队列
+	sigCh   chan *gosshd.SignalMsg          // signal 请求队列
+	ptyCh   chan *gosshd.PtyRequestMsg      // pty-req 请求队列
+	env     []string                        // 该 session 环境变量
+
+	copyBufSize int
+	ReqHandlers map[string]RequestHandlerFunc
 	ReqLogCallback
 }
 
@@ -147,14 +124,14 @@ var InterruptedErr = errors.New("interrupted by Context")
 
 var NotSessionTypeErr = errors.New("not session type channel")
 
-// SetReqHandler 添加一个对应请求类型的处理函数
-func (handler *DefaultSessionChanHandler) SetReqHandler(rtype string, f HandleRequest) {
-	handler.ReqHandlers[rtype] = f
+// SetReqHandlerFunc 添加一个对应请求类型的处理函数
+func (handler *DefaultSessionChanHandler) SetReqHandlerFunc(reqtype string, f RequestHandlerFunc) {
+	handler.ReqHandlers[reqtype] = f
 }
 
 // Start 接受客户端的 session channel 请求建立，并开始开启子协程的方式处理 requests；
 // 当所有请求处理完毕后或接收到一个 nil Request，将关闭该会话
-func (handler *DefaultSessionChanHandler) Start(c gosshd.SSHNewChannel, ctx gosshd.Context) error {
+func (handler *DefaultSessionChanHandler) Start(ctx gosshd.Context, c gosshd.NewChannel) error {
 	if c.ChannelType() != gosshd.SessionTypeChannel {
 		return NotSessionTypeErr
 	}
@@ -162,15 +139,11 @@ func (handler *DefaultSessionChanHandler) Start(c gosshd.SSHNewChannel, ctx goss
 	if err != nil {
 		return err
 	}
-	session := &BasicSession{
-		Context:    ctx,
-		SSHChannel: channel,
-		Mutex:      sync.Mutex{},
-		winchCh:    make(chan *gosshd.PtyWindowChangeMsg, handler.winMsgBufSize),
-		ptyCh:      make(chan *gosshd.PtyRequestMsg, handler.ptyMsgBufSize),
-		sigCh:      make(chan *gosshd.SignalMsg, handler.sigMsgBufSize),
-		env:        make([]string, 0),
-	}
+	//session := &BasicSession{
+	//	Context: ctx,
+	//	Channel: channel,
+	//	Mutex:   sync.Mutex{},
+	//}
 
 	for {
 		select {
@@ -182,7 +155,7 @@ func (handler *DefaultSessionChanHandler) Start(c gosshd.SSHNewChannel, ctx goss
 			if request == nil {
 				goto ret
 			}
-			go handler.ServeRequest(gosshd.Request{Request: request}, session, ctx)
+			go handler.ServeRequest(ctx, gosshd.Request{Request: request}, channel)
 		}
 	}
 ret:
@@ -192,10 +165,10 @@ ret:
 
 // ServeRequest 从注册的请求处理函数中找到对应请求类型的函数，并调用；
 // 处理函数返回的错误将被用于 handler 的 ReqLogCallback
-func (handler *DefaultSessionChanHandler) ServeRequest(request gosshd.Request, session gosshd.Session, ctx gosshd.Context) {
+func (handler *DefaultSessionChanHandler) ServeRequest(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) {
 	if reqHandler, ok := handler.ReqHandlers[request.Type]; ok {
 		go func() {
-			err := reqHandler(request, session)
+			err := reqHandler(ctx, request, session)
 			if handler.ReqLogCallback != nil {
 				handler.ReqLogCallback(err, request.Type, request.WantReply, request.Payload, ctx)
 			}
@@ -208,47 +181,47 @@ func (handler *DefaultSessionChanHandler) ServeRequest(request gosshd.Request, s
 	}
 }
 
-// HandleExit 接受退出请求，并关闭 Session
-func (handler *DefaultSessionChanHandler) HandleExit(request gosshd.Request, session gosshd.Session) error {
+// HandleExit 接受退出请求，并关闭 Channel
+func (handler *DefaultSessionChanHandler) HandleExit(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	return handler.SendExitStatus(0, true, session)
 }
 
-func (handler *DefaultSessionChanHandler) HandleEnvReq(request gosshd.Request, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) HandleEnvReq(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	var payload *gosshd.SetenvRequest
 	err := ssh.Unmarshal(request.Payload, &payload)
 	if err != nil {
 		return err
 	}
-	env := session.Env()
-	session.SetEnv(append(env, fmt.Sprintf("%s=%s", payload.Name, payload.Value)))
+	env := handler.Env()
+	handler.SetEnv(append(env, fmt.Sprintf("%s=%s", payload.Name, payload.Value)))
 	return request.Reply(true, nil)
 }
 
 // HandleSignalReq 解析客户端发送的窗口变换消息队列，并将其传入 session 窗口消息队列中
 // 根据 RFC 4254 6.9. signal 类型请求不需要回复
-func (handler *DefaultSessionChanHandler) HandleSignalReq(request gosshd.Request, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) HandleSignalReq(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	sigMsg := &gosshd.SignalMsg{}
 	if err := ssh.Unmarshal(request.Payload, sigMsg); err != nil {
 		return err
 	}
-	session.PutSignalMsg(sigMsg)
+	handler.PutSignalMsg(sigMsg)
 	return request.Reply(true, nil)
 }
 
 // HandleWinChangeReq 解析客户端发送的窗口变换消息队列，并将其传入 session 窗口消息队列中
 // 根据 RFC 4254 6.7. window-change 类型请求不需要回复
-func (handler *DefaultSessionChanHandler) HandleWinChangeReq(request gosshd.Request, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) HandleWinChangeReq(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	winMsg := &gosshd.PtyWindowChangeMsg{}
 	if err := ssh.Unmarshal(request.Payload, winMsg); err != nil {
 		return err
 	}
-	session.PutWinchMsg(winMsg)
+	handler.PutWinchMsg(winMsg)
 	request.Reply(true, nil)
 	return nil
 }
 
 // HandlePtyReq 解析 pty-req 请求，将信息存入 session 缓存队列中
-func (handler *DefaultSessionChanHandler) HandlePtyReq(request gosshd.Request, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) HandlePtyReq(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	ptyMsg := &gosshd.PtyRequestMsg{}
 	if err := ssh.Unmarshal(request.Payload, ptyMsg); err != nil {
 
@@ -258,17 +231,17 @@ func (handler *DefaultSessionChanHandler) HandlePtyReq(request gosshd.Request, s
 	if err != nil {
 		return err
 	}
-	session.PutPtyMsg(ptyMsg)
+	handler.PutPtyMsg(ptyMsg)
 	return nil
 }
 
 // HandleShellReq login -f 登陆用户，子进程打开错误或者处理完毕后 session 将被关闭；
 // todo 没有对 RFC 4254 8. 规定的 Encoding of Terminal Modes 进行处理
-func (handler *DefaultSessionChanHandler) HandleShellReq(request gosshd.Request, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) HandleShellReq(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	request.Reply(true, nil)
-	user := session.User()
-	ptyMsg := <-session.PtyMsg()
-	cmd := exec.Command("login", "-f", user.UserName) // fixme 会不会有 RCE 取决于 LookupUser 回调函数生成的 User
+	user := ctx.User()
+	ptyMsg := <-handler.PtyMsg()
+	cmd := exec.Command("login", "-f", user.UserName) // fixme 会不会有 RCE 取决于 LookupUser 回调函数生成的 UserName
 	// 当接收到 context 的 cancelFunc 时，取消子进程的执行
 	var wbuf []byte = nil
 	var rbuf []byte = nil
@@ -279,15 +252,6 @@ func (handler *DefaultSessionChanHandler) HandleShellReq(request gosshd.Request,
 
 	// 应用 term 环境变量
 	//cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyMsg.Term))
-	//shell, err := pty.StartWithSize(cmd, &pty.Winsize{
-	//	Cols: uint16(ptyMsg.Columns),
-	//	Rows: uint16(ptyMsg.Rows),
-	//	X:    uint16(ptyMsg.Width),
-	//	Y:    uint16(ptyMsg.Height),
-	//})
-	//if err != nil {
-	//	return err
-	//}
 
 	pty, tty, err := StartPtyWithSize(cmd, &Winsize{
 		Cols: uint16(ptyMsg.Columns),
@@ -309,15 +273,15 @@ func (handler *DefaultSessionChanHandler) HandleShellReq(request gosshd.Request,
 		session.Close()
 		return err
 	}
-	exitCtx, cancel := context.WithCancel(session.Ctx())
-	go CopyBufferWithContext(session, pty, wbuf, exitCtx.Done())
-	go CopyBufferWithContext(pty, session, rbuf, exitCtx.Done())
+	exitCtx, cancel := context.WithCancel(ctx)
+	go CopyBufferWithContext(session, pty, wbuf, exitCtx)
+	go CopyBufferWithContext(pty, session, rbuf, exitCtx)
 	// 接受窗口改变消息，并应用于 pty
 	go func() {
 		win := &Winsize{}
 		for {
 			select {
-			case winChange := <-session.WinchMsg():
+			case winChange := <-handler.WinchMsg():
 				win.Rows = uint16(winChange.Rows)
 				win.Cols = uint16(winChange.Columns)
 				win.X = uint16(winChange.Width)
@@ -333,8 +297,6 @@ func (handler *DefaultSessionChanHandler) HandleShellReq(request gosshd.Request,
 	go func() {
 		select {
 		case <-exitCtx.Done():
-			return
-		case <-session.Done():
 			cmd.Process.Kill()
 		}
 	}()
@@ -343,31 +305,32 @@ func (handler *DefaultSessionChanHandler) HandleShellReq(request gosshd.Request,
 	go func() {
 		for {
 			select {
-			case signal := <-session.SignalMsg():
+			case signal := <-handler.SignalMsg():
 				cmd.Process.Signal(signal.Signal)
 			case <-exitCtx.Done():
 				return
 			}
 		}
 	}()
+
 	err = cmd.Wait()
 	cancel()
 	return handler.SendExitStatus(cmd.ProcessState.ExitCode(), true, session)
 }
 
 // HandleExecReq 处理 exec 请求，处理完毕后 session 将被关闭
-func (handler *DefaultSessionChanHandler) HandleExecReq(request gosshd.Request, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) HandleExecReq(ctx gosshd.Context, request gosshd.Request, session gosshd.Channel) error {
 	cmdMsg := &gosshd.ExecMsg{}
 	if err := ssh.Unmarshal(request.Payload, cmdMsg); err != nil {
 		request.Reply(false, nil)
 		return err
 	}
-	return handler.execCmd(request, cmdMsg.Command, session)
+	return handler.execCmd(ctx, request, cmdMsg.Command, session)
 }
 
 // SendExitStatus 发送 exit-status 请求，但 close 为 true 时，会关闭 BasicSession，
 // 当 close 为 false 时，返回请求发送时出现的错误；否则返回关闭 session 时的发送的错误
-func (handler *DefaultSessionChanHandler) SendExitStatus(code int, close bool, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) SendExitStatus(code int, close bool, session gosshd.Channel) error {
 	status := struct{ Status uint32 }{uint32(code)}
 	_, err := session.SendRequest(gosshd.ExitStatus, false, ssh.Marshal(&status))
 	if err != nil && !close {
@@ -376,27 +339,38 @@ func (handler *DefaultSessionChanHandler) SendExitStatus(code int, close bool, s
 	return session.Close()
 }
 
-func (handler *DefaultSessionChanHandler) execCmd(request gosshd.Request, cmdline string, session gosshd.Session) error {
-	// Fixme golang 运行命令需要将每个参数都要分割，无法判断空白字符是分隔符还是作为字符串参数中的内容，故使用 `sh -c cmd` 运行命令
+func (handler *DefaultSessionChanHandler) execCmd(ctx gosshd.Context, request gosshd.Request, cmdline string, session gosshd.Channel) error {
 	words, err := shlex.Split(cmdline, true)
 	if err != nil {
 		request.Reply(false, nil)
 		return err
 	}
-	cmd, err := CreateCmdWithUser(session.User(), words[0], words[1:]...)
+	var cmd *exec.Cmd
+
+	if len(words) == 1 {
+		cmd, err = CreateCmdWithUser(ctx.User(), words[0])
+	} else if len(words) >= 2 {
+		cmd, err = CreateCmdWithUser(ctx.User(), words[0], words[1:]...)
+	} else {
+		request.Reply(false, nil)
+		return err
+	}
+
 	if err != nil {
 		request.Reply(false, nil)
 		return err
 	}
+
 	request.Reply(true, nil)
-	cmd.Env = session.Env()
-	cmd.Dir = session.User().HomeDir
+	cmd.Env = handler.Env()
+	cmd.Dir = ctx.User().HomeDir
+
 	// 如果客户端之前请求了伪终端
-	if len(session.PtyMsg()) != 0 {
+	if len(handler.PtyMsg()) != 0 {
 		select {
-		case ptyMsg := <-session.PtyMsg():
-			return handler.execCmdWithPty(request, cmd, ptyMsg, session)
-		case <-session.Done(): // 如果分配到 pty 之前就已经关闭
+		case ptyMsg := <-handler.PtyMsg():
+			return handler.execCmdWithPty(ctx, request, cmd, ptyMsg, session)
+		case <-ctx.Done(): // 如果分配到 pty 之前就已经关闭
 			return nil
 		}
 	} else {
@@ -407,18 +381,19 @@ func (handler *DefaultSessionChanHandler) execCmd(request gosshd.Request, cmdlin
 			request.Reply(false, nil)
 			return err
 		}
-		var wbuf []byte = nil
-		var rbuf []byte = nil
-		var wbuf2 []byte = nil
+		var stdOutWBuf []byte = nil
+		var stdInRBuf []byte = nil
+		var errWBuf []byte = nil
+
 		if handler.copyBufSize > 0 {
-			rbuf = make([]byte, handler.copyBufSize)
-			wbuf = make([]byte, handler.copyBufSize)
-			wbuf2 = make([]byte, handler.copyBufSize)
+			stdInRBuf = make([]byte, handler.copyBufSize)
+			stdOutWBuf = make([]byte, handler.copyBufSize)
+			errWBuf = make([]byte, handler.copyBufSize)
 		}
-		exitCtx, cancel := context.WithCancel(session.Ctx())
-		go CopyBufferWithContext(stdIn, session, rbuf, exitCtx.Done())
-		go CopyBufferWithContext(session.Stderr(), stdErr, wbuf, exitCtx.Done())
-		go CopyBufferWithContext(session, stdOut, wbuf2, exitCtx.Done())
+		exitCtx, cancel := context.WithCancel(ctx)
+		go CopyBufferWithContext(stdIn, session, stdInRBuf, exitCtx)
+		go CopyBufferWithContext(session.Stderr(), stdErr, stdOutWBuf, exitCtx)
+		go CopyBufferWithContext(session, stdOut, errWBuf, exitCtx)
 		if err = cmd.Start(); err != nil {
 			cancel()
 			session.Close()
@@ -428,7 +403,7 @@ func (handler *DefaultSessionChanHandler) execCmd(request gosshd.Request, cmdlin
 		go func() {
 			for {
 				select {
-				case signal := <-session.SignalMsg():
+				case signal := <-handler.SignalMsg():
 					sig := gosshd.Signals[signal.Signal]
 					cmd.Process.Signal(syscall.Signal(sig))
 				case <-exitCtx.Done():
@@ -436,14 +411,14 @@ func (handler *DefaultSessionChanHandler) execCmd(request gosshd.Request, cmdlin
 				}
 			}
 		}()
-		cmd.Wait()
+		_ = cmd.Wait()
 		cancel()
 		return handler.SendExitStatus(cmd.ProcessState.ExitCode(), true, session)
 	}
 }
 
 // 分配一个 Pty 至 cmd ，并将输入输出绑定到 session 中，最终 session 将被关闭
-func (handler *DefaultSessionChanHandler) execCmdWithPty(request gosshd.Request, cmd *exec.Cmd, msg *gosshd.PtyRequestMsg, session gosshd.Session) error {
+func (handler *DefaultSessionChanHandler) execCmdWithPty(ctx gosshd.Context, request gosshd.Request, cmd *exec.Cmd, msg *gosshd.PtyRequestMsg, session gosshd.Channel) error {
 	var wbuf []byte = nil
 	var rbuf []byte = nil
 	if handler.copyBufSize > 0 {
@@ -458,6 +433,7 @@ func (handler *DefaultSessionChanHandler) execCmdWithPty(request gosshd.Request,
 		X:    uint16(msg.Width),
 		Y:    uint16(msg.Height),
 	})
+
 	if pty != nil {
 		defer pty.Close()
 	}
@@ -467,20 +443,15 @@ func (handler *DefaultSessionChanHandler) execCmdWithPty(request gosshd.Request,
 	if err != nil {
 		return err
 	}
-
-	if err := cmd.Start(); err != nil {
-		session.Close()
-		return err
-	}
-	exitCtx, cancel := context.WithCancel(session.Ctx())
-	go CopyBufferWithContext(session, pty, wbuf, exitCtx.Done())
-	go CopyBufferWithContext(pty, session, rbuf, exitCtx.Done())
+	exitCtx, cancel := context.WithCancel(ctx)
+	go CopyBufferWithContext(session, pty, wbuf, exitCtx)
+	go CopyBufferWithContext(pty, session, rbuf, exitCtx)
 	// 接受窗口改变消息，并应用于 pty
 	go func() {
 		win := &Winsize{}
 		for {
 			select {
-			case winChange := <-session.WinchMsg():
+			case winChange := <-handler.WinchMsg():
 				win.Rows = uint16(winChange.Rows)
 				win.Cols = uint16(winChange.Columns)
 				win.X = uint16(winChange.Width)
@@ -495,7 +466,7 @@ func (handler *DefaultSessionChanHandler) execCmdWithPty(request gosshd.Request,
 	// fixme 当 session 取消信号来临时，是否要关闭子进程
 	go func() {
 		select {
-		case <-session.Done():
+		case <-ctx.Done():
 			cmd.Process.Kill()
 		}
 	}()
@@ -504,7 +475,7 @@ func (handler *DefaultSessionChanHandler) execCmdWithPty(request gosshd.Request,
 	go func() {
 		for {
 			select {
-			case signal := <-session.SignalMsg():
+			case signal := <-handler.SignalMsg():
 				cmd.Process.Signal(signal.Signal)
 			case <-exitCtx.Done():
 				//fmt.Println("break sig")
@@ -512,6 +483,13 @@ func (handler *DefaultSessionChanHandler) execCmdWithPty(request gosshd.Request,
 			}
 		}
 	}()
+
+	if err := cmd.Start(); err != nil {
+		session.Close()
+		cancel()
+		return err
+	}
+
 	err = cmd.Wait()
 	cancel()
 	handler.SendExitStatus(cmd.ProcessState.ExitCode(), true, session)

@@ -1,5 +1,7 @@
 package gosshd
 
+// 全局请求消息定义
+
 const (
 	GlobalReqTcpIpForward       = "tcpip-forward"
 	GlobalReqCancelTcpIpForward = "cancel-tcpip-forward"

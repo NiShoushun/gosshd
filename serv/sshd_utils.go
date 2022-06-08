@@ -1,4 +1,4 @@
-package utils
+package serv
 
 import (
 	"github.com/nishoushun/gosshd"
@@ -18,14 +18,14 @@ func SimpleServerOnUnix() (*gosshd.SSHServer, error) {
 		return UnixUserInfo(metadata.User())
 	}
 	sshd.SetPasswdCallback(CheckUnixPasswd)
-	sshd.SetNewChanHandleFunc(gosshd.SessionTypeChannel, func(c gosshd.SSHNewChannel, ctx gosshd.Context) {
+	sshd.NewChannel(gosshd.SessionTypeChannel, func(ctx gosshd.Context, c gosshd.NewChannel) {
 		handler := NewSessionChannelHandler(10, 10, 10, 0)
 		handler.SetDefaults()
-		handler.Start(c, ctx)
+		handler.Start(ctx, c)
 	})
-	sshd.SetNewChanHandleFunc(gosshd.DirectTcpIpChannel, NewTcpIpDirector(0).HandleDirectTcpIP)
+	sshd.NewChannel(gosshd.DirectTcpIpChannel, NewTcpIpDirector(0).HandleDirectTcpIP)
 	fhandler := NewForwardedTcpIpHandler(0)
-	sshd.SetGlobalRequestHandleFunc(gosshd.GlobalReqTcpIpForward, fhandler.ServeForward)
-	sshd.SetGlobalRequestHandleFunc(gosshd.GlobalReqCancelTcpIpForward, fhandler.CancelForward)
+	sshd.NewGlobalRequest(gosshd.GlobalReqTcpIpForward, fhandler.ServeForward)
+	sshd.NewGlobalRequest(gosshd.GlobalReqCancelTcpIpForward, fhandler.CancelForward)
 	return sshd, nil
 }

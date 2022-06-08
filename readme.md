@@ -48,7 +48,7 @@ GoSSHD 提供了 3 种类型的身份验证方式，通过设置回调函数来�
 ```go
 import (
 	"github.com/nishoushun/gosshd"
-	"github.com/nishoushun/gosshd/utils"
+	"github.com/nishoushun/gosshd/serv"
 	"log"
 )
 
