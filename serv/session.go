@@ -139,11 +139,6 @@ func (handler *DefaultSessionChanHandler) Start(ctx gosshd.Context, c gosshd.New
 	if err != nil {
 		return err
 	}
-	//session := &BasicSession{
-	//	Context: ctx,
-	//	Channel: channel,
-	//	Mutex:   sync.Mutex{},
-	//}
 
 	for {
 		select {

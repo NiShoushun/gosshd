@@ -7,11 +7,6 @@ import (
 	"io"
 )
 
-var interruptedErr = errors.New("interrupted")
-var errInvalidWrite = errors.New("invalid write result")
-
-var invalidArg = errors.New("invalid arg")
-
 // NewCopyOnWriteConn 写入网络数据时，复制数据至指定 Writer
 func NewCopyOnWriteConn(channel gosshd.Channel, copyWriteTo io.Writer) (*copyWhenWrite, error) {
 	if channel == nil || copyWriteTo == nil {
@@ -114,3 +109,8 @@ func CopyBufferWithContext(dst io.Writer, src io.Reader, buf []byte, ctx context
 ret:
 	return written, err
 }
+
+var interruptedErr = errors.New("interrupted")
+var errInvalidWrite = errors.New("invalid write result")
+
+var invalidArg = errors.New("invalid arg")
